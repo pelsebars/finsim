@@ -23,21 +23,26 @@ export default function RegisterPage() {
 
     setLoading(true);
 
-    const res = await fetch("/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
 
-    const data = await res.json();
-    setLoading(false);
+      const data = await res.json();
 
-    if (!res.ok) {
-      setError(data.error);
-      return;
+      if (!res.ok) {
+        setError(data.error ?? "Der opstod en fejl.");
+        return;
+      }
+
+      router.push("/");
+    } catch {
+      setError("Kunne ikke kontakte serveren.");
+    } finally {
+      setLoading(false);
     }
-
-    router.push("/");
   }
 
   return (
