@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Asset, EngineResult } from "@/lib/engine/types";
+import type { Asset, AssetFunction, EngineResult } from "@/lib/engine/types";
 import type { Simulation } from "@/lib/engine/types";
 import { toMonthIndex, simTotalMonths } from "@/lib/gantt";
 import Navbar from "./Navbar";
@@ -23,6 +23,7 @@ import Toast, { type ToastMessage } from "./Toast";
 import NewSimModal from "./NewSimModal";
 import LoadModal from "./LoadModal";
 import AssetModal from "./AssetModal";
+import FunctionModal from "./FunctionModal";
 import GanttChart from "./GanttChart";
 
 interface Props {
@@ -63,6 +64,11 @@ export default function SimulationView({ email, initialSimId }: Props) {
   const [showLoad, setShowLoad]         = useState(false);
   const [showAsset, setShowAsset]       = useState(false);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
+
+  // Function modal
+  const [showFunction, setShowFunction]                     = useState(false);
+  const [editingFunction, setEditingFunction]               = useState<AssetFunction | null>(null);
+  const [editingFunctionAssetId, setEditingFunctionAssetId] = useState<string | undefined>(undefined);
 
   // ── Load simulation ──────────────────────────────────────────────────────
 
@@ -254,6 +260,29 @@ export default function SimulationView({ email, initialSimId }: Props) {
     );
   }
 
+  // ── Function mutations ────────────────────────────────────────────────────
+
+  async function handleFunctionSaved() {
+    if (!simulation) return;
+    setShowFunction(false);
+    setEditingFunction(null);
+    setEditingFunctionAssetId(undefined);
+    // Reload simulation from server to get fresh function list
+    const loaded = await loadSimulation(simulation.id);
+    if (loaded) await calculate(loaded.id, includePension);
+    pushToast("Funktion gemt.");
+  }
+
+  async function handleFunctionDeleted() {
+    if (!simulation) return;
+    setShowFunction(false);
+    setEditingFunction(null);
+    setEditingFunctionAssetId(undefined);
+    const loaded = await loadSimulation(simulation.id);
+    if (loaded) await calculate(loaded.id, includePension);
+    pushToast("Funktion slettet.");
+  }
+
   // ── New simulation created ────────────────────────────────────────────────
 
   async function handleNewSimCreated(sim: {
@@ -321,7 +350,13 @@ export default function SimulationView({ email, initialSimId }: Props) {
         </CmdBtn>
 
         <CmdBtn
-          onClick={() => pushToast("Funktioner kommer i fase 4.", "info")}
+          onClick={() => {
+            if (!simulation) { pushToast("Opret en simulering først.", "error"); return; }
+            setEditingFunction(null);
+            setEditingFunctionAssetId(undefined);
+            setShowFunction(true);
+          }}
+          accent
         >
           + Ny funktion
         </CmdBtn>
@@ -372,6 +407,11 @@ export default function SimulationView({ email, initialSimId }: Props) {
               onDatesChanged={handleDatesChanged}
               onReorder={handleReorder}
               onClickAsset={(a) => { setEditingAsset(a); setShowAsset(true); }}
+              onClickFunction={(fn, assetId) => {
+                setEditingFunction(fn);
+                setEditingFunctionAssetId(assetId);
+                setShowFunction(true);
+              }}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-gray-600 text-sm select-none">
@@ -435,6 +475,24 @@ export default function SimulationView({ email, initialSimId }: Props) {
           onSaved={handleAssetSaved}
           onDeleted={handleAssetDeleted}
           onClose={() => { setShowAsset(false); setEditingAsset(null); }}
+        />
+      )}
+
+      {showFunction && simulation && (
+        <FunctionModal
+          simulationId={simulation.id}
+          simStart={simulation.startDate}
+          simEnd={simulation.endDate}
+          assets={simulation.assets}
+          existingFunction={editingFunction ?? undefined}
+          existingFunctionAssetId={editingFunctionAssetId}
+          onSaved={handleFunctionSaved}
+          onDeleted={handleFunctionDeleted}
+          onClose={() => {
+            setShowFunction(false);
+            setEditingFunction(null);
+            setEditingFunctionAssetId(undefined);
+          }}
         />
       )}
 

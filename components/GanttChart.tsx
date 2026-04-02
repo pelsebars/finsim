@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useRef, useState } from "react";
-import type { Asset, EngineResult } from "@/lib/engine/types";
+import type { Asset, AssetFunction, EngineResult } from "@/lib/engine/types";
 import {
   toMonthIndex, fromMonthIndex, fmtVal, fmtMonthLong, parseYM, avgVariableRate,
 } from "@/lib/gantt";
@@ -36,8 +36,8 @@ const TYPE_ICON: Record<string, string> = {
 interface Tooltip {
   assetId: string;
   label: string;
-  x: number;
-  y: number;
+  x: number; // clientX
+  y: number; // clientY
 }
 
 interface Props {
@@ -49,11 +49,12 @@ interface Props {
   onDatesChanged: (assetId: string, startDate: string, endDate: string) => void;
   onReorder: (orderedIds: string[]) => void;
   onClickAsset: (asset: Asset) => void;
+  onClickFunction?: (fn: AssetFunction, assetId: string) => void;
 }
 
 export default function GanttChart({
   assets, simulation, engineResult, visibleStartMonth, visibleMonths,
-  onDatesChanged, onReorder, onClickAsset,
+  onDatesChanged, onReorder, onClickAsset, onClickFunction,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
@@ -222,8 +223,8 @@ export default function GanttChart({
     setTooltip({
       assetId: a.id,
       label: `${label}: ${val}`,
-      x: e.clientX - rect.left,
-      y: sorted.findIndex(x => x.id === a.id) * ROW_H,
+      x: e.clientX,
+      y: e.clientY,
     });
   }
 
@@ -430,6 +431,78 @@ export default function GanttChart({
           />
         </div>
 
+        {/* Function indicators — rendered above the pølse */}
+        {a.functions && a.functions.map((fn) => {
+          const fnStartIdx = toMonthIndex(fn.startDate, simulation.startDate);
+          const isOnce = fn.type === "deposit_once" || fn.type === "withdrawal_once";
+          const isDeposit = fn.type === "deposit_once" || fn.type === "deposit_recurring";
+
+          if (isOnce) {
+            const xFrac = (fnStartIdx - visibleStartMonth) / visibleMonths;
+            if (xFrac < -0.02 || xFrac > 1.02) return null;
+            return (
+              <div
+                key={fn.id}
+                className="absolute flex items-center gap-0.5 cursor-pointer z-10"
+                style={{
+                  left: `${xFrac * 100}%`,
+                  top: 4,
+                  transform: "translateX(-50%)",
+                }}
+                title={`${isDeposit ? "Indbetaling" : "Udbetaling"}: ${fmtVal(fn.amount)}`}
+                onClick={(e) => { e.stopPropagation(); onClickFunction?.(fn, a.id); }}
+              >
+                <div
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    backgroundColor: isDeposit ? "#16a34a" : "#dc2626",
+                    flexShrink: 0,
+                  }}
+                />
+                <span className="text-xs whitespace-nowrap" style={{ color: isDeposit ? "#86efac" : "#fca5a5", fontSize: 10 }}>
+                  {fmtVal(fn.amount)}
+                </span>
+              </div>
+            );
+          } else {
+            // Recurring — center on the pølse range
+            const fnEndIdx = fn.endDate
+              ? toMonthIndex(fn.endDate, simulation.startDate)
+              : toMonthIndex(a.endDate, simulation.startDate);
+            const midIdx = (fnStartIdx + fnEndIdx) / 2;
+            const xFrac = (midIdx - visibleStartMonth) / visibleMonths;
+            if (xFrac < -0.05 || xFrac > 1.05) return null;
+
+            // Calculate total payments
+            const interval = fn.intervalMonths ?? 1;
+            const paymentCount = Math.max(1, Math.ceil((fnEndIdx - fnStartIdx) / interval) + 1);
+            const totalAmount = fn.amount * paymentCount;
+
+            return (
+              <div
+                key={fn.id}
+                className="absolute flex flex-col items-center cursor-pointer z-10"
+                style={{
+                  left: `${xFrac * 100}%`,
+                  top: 2,
+                  transform: "translateX(-50%)",
+                }}
+                title={`${isDeposit ? "Løbende indbetaling" : "Løbende udbetaling"}: ${fmtVal(fn.amount)}/md`}
+                onClick={(e) => { e.stopPropagation(); onClickFunction?.(fn, a.id); }}
+              >
+                <span style={{ color: isDeposit ? "#86efac" : "#fca5a5", fontSize: 13, lineHeight: 1 }}>
+                  {isDeposit ? "↓" : "↑"}
+                </span>
+                <span className="whitespace-nowrap" style={{ color: isDeposit ? "#86efac" : "#fca5a5", fontSize: 9 }}>
+                  {fmtVal(totalAmount)}
+                </span>
+              </div>
+            );
+          }
+        })}
+
         {/* Visible window clips — show start/end value outside pølse if it's clipped */}
         {startFrac < 0 && (
           <span className="absolute left-0 top-1/2 -translate-y-1/2 text-xs text-gray-500 px-1">
@@ -521,13 +594,13 @@ export default function GanttChart({
         </div>
       </div>
 
-      {/* Tooltip */}
+      {/* Tooltip — fixed positioning so it follows the cursor regardless of scroll */}
       {tooltip && (
         <div
-          className="absolute z-30 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white pointer-events-none shadow"
+          className="fixed z-50 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white pointer-events-none shadow"
           style={{
             left: tooltip.x + 12,
-            top: 32 + tooltip.y + 4, // offset by header height
+            top: tooltip.y,
             transform: "translateY(-50%)",
           }}
         >
