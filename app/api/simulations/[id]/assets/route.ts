@@ -2,6 +2,34 @@ import { NextRequest, NextResponse } from "next/server";
 import pool from "@/lib/db";
 import { getSession } from "@/lib/auth";
 
+/**
+ * Auto-create a percent branch from parentId → childId.
+ * Allocates whatever percentage remains after existing percent branches.
+ * If already at 100%, no branch is created (surplus warning will show in UI).
+ */
+async function upsertBranch(parentAssetId: string, childAssetId: string) {
+  const existing = await pool.query(
+    `SELECT id FROM asset_branches WHERE parent_asset_id = $1 AND child_asset_id = $2`,
+    [parentAssetId, childAssetId]
+  );
+  if (existing.rows.length > 0) return; // already exists
+
+  const sumRes = await pool.query(
+    `SELECT COALESCE(SUM(value), 0) AS total
+     FROM asset_branches WHERE parent_asset_id = $1 AND type = 'percent'`,
+    [parentAssetId]
+  );
+  const allocated = parseFloat(sumRes.rows[0].total);
+  const remaining = Math.max(0, 1.0 - allocated);
+  if (remaining <= 0) return; // parent fully allocated — surplus warning will show
+
+  await pool.query(
+    `INSERT INTO asset_branches (parent_asset_id, child_asset_id, type, value)
+     VALUES ($1, $2, 'percent', $3)`,
+    [parentAssetId, childAssetId, remaining]
+  );
+}
+
 async function ownsSimulation(simulationId: string, userId: string): Promise<boolean> {
   const res = await pool.query(
     "SELECT id FROM simulations WHERE id = $1 AND user_id = $2",
@@ -62,6 +90,11 @@ export async function POST(
 
   // Update simulation updated_at
   await pool.query("UPDATE simulations SET updated_at = NOW() WHERE id = $1", [id]);
+
+  // Auto-create branch when a parent is specified
+  if (parent_id) {
+    await upsertBranch(parent_id, res.rows[0].id);
+  }
 
   return NextResponse.json(res.rows[0], { status: 201 });
 }

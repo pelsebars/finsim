@@ -25,6 +25,7 @@ import LoadModal from "./LoadModal";
 import AssetModal from "./AssetModal";
 import FunctionModal from "./FunctionModal";
 import GanttChart from "./GanttChart";
+import GraphArea from "./GraphArea";
 
 interface Props {
   email: string;
@@ -58,6 +59,9 @@ export default function SimulationView({ email, initialSimId }: Props) {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  // Rename state
+  const [renamingName, setRenamingName] = useState<string | null>(null);
 
   // Modals
   const [showNewSim, setShowNewSim]     = useState(false);
@@ -304,12 +308,49 @@ export default function SimulationView({ email, initialSimId }: Props) {
     }
   }
 
+  // ── Rename simulation ─────────────────────────────────────────────────────
+
+  async function handleRenameCommit() {
+    if (!simulation || renamingName === null) return;
+    const newName = renamingName.trim();
+    setRenamingName(null);
+    if (!newName || newName === simulation.name) return;
+    try {
+      const res = await fetch(`/api/simulations/${simulation.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (!res.ok) throw new Error();
+      setSimulation((prev) => prev ? { ...prev, name: newName } : prev);
+    } catch {
+      pushToast("Kunne ikke omdøbe simulering.", "error");
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   const hasErrors = simulation
     ? (() => {
         const ids = new Set(simulation.assets.map((a) => a.id));
-        return simulation.assets.some((a) => a.parentId && !ids.has(a.parentId));
+        // Direct orphans: parentId set but parent missing
+        const errorSet = new Set(
+          simulation.assets
+            .filter((a) => a.parentId && !ids.has(a.parentId))
+            .map((a) => a.id)
+        );
+        // Cascade: also mark all downstream children as errors
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const a of simulation.assets) {
+            if (!errorSet.has(a.id) && a.parentId && errorSet.has(a.parentId)) {
+              errorSet.add(a.id);
+              changed = true;
+            }
+          }
+        }
+        return errorSet.size > 0;
       })()
     : false;
 
@@ -320,13 +361,32 @@ export default function SimulationView({ email, initialSimId }: Props) {
 
       {/* ── Command bar ── */}
       <div className="shrink-0 bg-gray-900 border-b border-gray-800 px-4 py-2 flex items-center gap-2 flex-wrap">
-        {/* Simulation name */}
+        {/* Simulation name — click to rename */}
         {simulation && (
-          <span className="text-gray-300 text-sm font-medium mr-2 truncate max-w-48">
-            {simulation.name}
-          </span>
+          renamingName !== null ? (
+            <input
+              className="bg-gray-800 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-gray-400 mr-2 w-48"
+              value={renamingName}
+              autoFocus
+              onChange={(e) => setRenamingName(e.target.value)}
+              onBlur={handleRenameCommit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRenameCommit();
+                if (e.key === "Escape") setRenamingName(null);
+              }}
+            />
+          ) : (
+            <button
+              className="text-gray-300 text-sm font-medium mr-2 truncate max-w-48 hover:text-white transition-colors"
+              title="Klik for at omdøbe"
+              onClick={() => setRenamingName(simulation.name)}
+            >
+              {simulation.name}
+            </button>
+          )
         )}
 
+        <CmdBtn onClick={() => setShowNewSim(true)}>Nyt</CmdBtn>
         <CmdBtn onClick={() => setShowLoad(true)}>Load</CmdBtn>
 
         <CmdBtn
@@ -428,14 +488,17 @@ export default function SimulationView({ email, initialSimId }: Props) {
           <div className="w-12 h-0.5 bg-gray-600 rounded-full" />
         </div>
 
-        {/* Graph placeholder */}
+        {/* Graph area */}
         <div
-          className="flex-1 bg-gray-900 flex items-center justify-center border-t border-gray-800 overflow-hidden"
+          className="flex-1 bg-gray-900 border-t border-gray-800 overflow-hidden"
           style={{ minHeight: "20%" }}
         >
-          <span className="text-gray-600 text-sm select-none">
-            {hasErrors ? "NA — assets i fejl-tilstand" : "Grafer — kommer i fase 5"}
-          </span>
+          <GraphArea
+            engineResult={engineResult}
+            visibleStartMonth={visibleStartMonth}
+            visibleMonths={visibleMonths}
+            hasErrors={hasErrors}
+          />
         </div>
 
         {/* Horizontal scrollbar */}

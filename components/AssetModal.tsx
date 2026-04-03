@@ -78,7 +78,7 @@ export default function AssetModal({
 
   // Stock / Liquid / Pension
   const [annualRate, setAnnualRate] = useState(
-    asset?.annualRate != null ? String(Math.round(asset.annualRate * 100)) : ""
+    asset?.annualRate != null ? String(Math.round(asset.annualRate * 100)) : "5"
   );
 
   // Property
@@ -86,7 +86,7 @@ export default function AssetModal({
     asset?.variableRates ? "variable" : "fixed"
   );
   const [fixedRate, setFixedRate] = useState(
-    asset?.annualRate != null ? String(Math.round(asset.annualRate * 100)) : ""
+    asset?.annualRate != null ? String(Math.round(asset.annualRate * 100)) : "5"
   );
   const [varRows, setVarRows] = useState<VarRateRow[]>(() => {
     if (asset?.variableRates) {
@@ -110,6 +110,24 @@ export default function AssetModal({
     asset?.establishmentCost != null ? toDisplayValue(asset.establishmentCost) : "0"
   );
 
+  // Branch distribution state (only used when editing a parent asset)
+  // branches: maps childAssetId → { branchId, pct (display 0–100) }
+  const [branchEdits, setBranchEdits] = useState<
+    Record<string, { branchId: string; pct: string }>
+  >(() => {
+    if (!asset) return {};
+    const out: Record<string, { branchId: string; pct: string }> = {};
+    for (const b of asset.branches) {
+      if (b.type === "percent") {
+        out[b.childAssetId] = {
+          branchId: b.id,
+          pct: String(Math.round(b.value * 100)),
+        };
+      }
+    }
+    return out;
+  });
+
   const [error, setError]     = useState("");
   const [saving, setSaving]   = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
@@ -121,7 +139,20 @@ export default function AssetModal({
     (a) => a.type !== "loan" && a.id !== asset?.id
   );
 
+  // Children of this asset (for branch editor when editing)
+  const childAssets = isEdit
+    ? existingAssets.filter((a) => a.parentId === asset?.id)
+    : [];
+
   const hasParent = !!parentId;
+
+  // ── Validate branch percentages ───────────────────────────────────────────
+
+  function branchPctTotal(): number {
+    return Object.values(branchEdits).reduce((sum, b) => sum + (parseFloat(b.pct) || 0), 0);
+  }
+
+  // ── Save ──────────────────────────────────────────────────────────────────
 
   async function handleSave() {
     if (!name.trim()) { setError("Angiv et navn."); return; }
@@ -129,6 +160,15 @@ export default function AssetModal({
     const startDate = `${startY}-${startM}-01`;
     const endDate   = `${endY}-${endM}-01`;
     if (startDate >= endDate) { setError("Slutdato skal være efter startdato."); return; }
+
+    // Validate branch percentages if editing a parent with children
+    if (isEdit && childAssets.length > 0 && Object.keys(branchEdits).length > 0) {
+      const total = branchPctTotal();
+      if (total > 100.001) {
+        setError(`Fordelinger summer til ${Math.round(total)}% — må ikke overstige 100%.`);
+        return;
+      }
+    }
 
     // Build payload
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -192,6 +232,12 @@ export default function AssetModal({
         throw new Error(d.error ?? "Fejl ved gem.");
       }
       const saved = await res.json();
+
+      // Persist branch edits (only for existing parent assets)
+      if (isEdit && asset && childAssets.length > 0) {
+        await saveBranchEdits();
+      }
+
       // Normalise field names from snake_case API to camelCase Asset type
       const normalised: Asset = {
         id: saved.id,
@@ -216,6 +262,21 @@ export default function AssetModal({
       setError(e instanceof Error ? e.message : "Ukendt fejl.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveBranchEdits() {
+    for (const [childId, edit] of Object.entries(branchEdits)) {
+      const val = parseFloat(edit.pct) / 100;
+      if (isNaN(val)) continue;
+      await fetch(
+        `/api/simulations/${simulationId}/branches/${edit.branchId}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: val, type: "percent" }),
+        }
+      );
     }
   }
 
@@ -274,6 +335,9 @@ export default function AssetModal({
   }
 
   // --- Step 2: form ---
+  const branchTotal = branchPctTotal();
+  const branchOver  = branchTotal > 100.001;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 overflow-y-auto py-8" onClick={onClose}>
       <div
@@ -382,7 +446,7 @@ export default function AssetModal({
                 <Field label="Fast rente (%)">
                   <input
                     className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-500"
-                    value={fixedRate} onChange={(e) => setFixedRate(e.target.value)} placeholder="3"
+                    value={fixedRate} onChange={(e) => setFixedRate(e.target.value)} placeholder="5"
                   />
                 </Field>
               )}
@@ -457,6 +521,50 @@ export default function AssetModal({
               />
             </Field>
           )}
+
+          {/* Branch distribution — shown when editing a parent asset with children */}
+          {isEdit && childAssets.length > 0 && (
+            <div className="border-t border-gray-700 pt-3 mt-1">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-400">Fordeling til børn</span>
+                <span className={`text-xs tabular-nums ${branchOver ? "text-red-400" : "text-gray-500"}`}>
+                  {Math.round(branchTotal)}% allokeret
+                </span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                {childAssets.map((child) => {
+                  const edit = branchEdits[child.id];
+                  return (
+                    <div key={child.id} className="flex items-center gap-2">
+                      <span className="flex-1 text-sm text-gray-300 truncate">{child.name}</span>
+                      {edit ? (
+                        <>
+                          <input
+                            className="w-16 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white text-right focus:outline-none focus:border-gray-500"
+                            value={edit.pct}
+                            onChange={(e) =>
+                              setBranchEdits((prev) => ({
+                                ...prev,
+                                [child.id]: { ...edit, pct: e.target.value },
+                              }))
+                            }
+                          />
+                          <span className="text-sm text-gray-500">%</span>
+                        </>
+                      ) : (
+                        <span className="text-xs text-gray-600 italic">ingen gren</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {branchOver && (
+                <p className="text-xs text-red-400 mt-1">
+                  Fordelinger må ikke overstige 100%
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {error && <p className="text-red-400 text-sm mt-3">{error}</p>}
@@ -473,7 +581,7 @@ export default function AssetModal({
           <button
             className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium py-2 rounded transition-colors"
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || branchOver}
           >
             {saving ? "Gemmer…" : isEdit ? "Gem ændringer" : "Opret asset"}
           </button>
@@ -532,3 +640,4 @@ function Field({
     </div>
   );
 }
+
